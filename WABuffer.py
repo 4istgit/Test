@@ -1,8 +1,8 @@
 diff --git a/WABuffer.py b/WABuffer.py
-index bf83228dcdfa2428e4cfedf98a3b53075370f911..71501e5da4cfb431dc3a39e43605ef26502e36b2 100644
+index bf83228dcdfa2428e4cfedf98a3b53075370f911..94544920c19cea771dd6d7a916a01f99acbbb800 100644
 --- a/WABuffer.py
 +++ b/WABuffer.py
-@@ -1,54 +1,54 @@
+@@ -1,58 +1,104 @@
  # SMZWWA_fixed.py
  # ArcGIS Pro / ArcPy 3.x (Python 3.9+)
  # Western WA workflow:
@@ -11,6 +11,7 @@ index bf83228dcdfa2428e4cfedf98a3b53075370f911..71501e5da4cfb431dc3a39e43605ef26
  # 3) Type Np intersections (Western WA): fixed 56-ft buffers (true intersections only: ≥2 distinct Np streams and ≥1 interior contact)
  # 4) Optional export of final merged buffers to shapefile (safe field mapping, optional RemoveZ/RemoveM, spatial index)
  import arcpy
++import argparse
  import os
 +import re
  import time
@@ -41,6 +42,51 @@ index bf83228dcdfa2428e4cfedf98a3b53075370f911..71501e5da4cfb431dc3a39e43605ef26
  export_final_shp = True
  out_export_folder = r"D:\Downloaded Shapes\NHD\Washington\exports"
  out_export_name = "WABuffers_merged.shp"
++def parse_args():
++    """
++    Optional CLI overrides for running directly in VS Code terminal.
++    Any values not supplied on CLI keep the defaults above.
++    """
++    parser = argparse.ArgumentParser(
++        description="Build Western WA SMZ/no-harvest buffers from hydro flowlines."
++    )
++    parser.add_argument("--flowlines", dest="flowlines_shp", help="Input flowlines shapefile/feature class path.")
++    parser.add_argument("--type-field", dest="type_field", help="Field that stores stream type code (e.g., FP_REF_ID).")
++    parser.add_argument("--bankfull-field", dest="bankfull_field", help="Field containing full bankfull width in feet.")
++    parser.add_argument("--out-gdb", dest="out_gdb", help="Output file geodatabase path.")
++    parser.add_argument("--target-wkid", dest="target_sr_wkid", type=int, help="Projected output WKID (2913 WA North / 2914 WA South).")
++    parser.add_argument("--snap-tol-ft", dest="snap_tol_ft", type=float, help="Near-table snap tolerance in feet.")
++    parser.add_argument("--intersection-radius-ft", dest="intersection_radius_ft", type=float, help="NP intersection fixed buffer radius in feet.")
++    parser.add_argument("--is-half-width", dest="is_half_width", action="store_true", help="Set when bankfull field is already half-width.")
++    parser.add_argument("--no-export-shp", dest="no_export_shp", action="store_true", help="Skip final shapefile export.")
++    parser.add_argument("--export-folder", dest="out_export_folder", help="Folder for final exported shapefile.")
++    parser.add_argument("--export-name", dest="out_export_name", help="Filename for final exported shapefile.")
++    args, _unknown = parser.parse_known_args()
++    return args
++
++cli = parse_args()
++if cli.flowlines_shp:
++    flowlines_shp = cli.flowlines_shp
++if cli.type_field:
++    type_field = cli.type_field
++if cli.bankfull_field:
++    bankfull_field = cli.bankfull_field
++if cli.out_gdb:
++    out_gdb = cli.out_gdb
++if cli.target_sr_wkid:
++    target_sr_wkid = cli.target_sr_wkid
++if cli.snap_tol_ft is not None:
++    snap_tol_ft = cli.snap_tol_ft
++if cli.intersection_radius_ft is not None:
++    intersection_radius_ft = cli.intersection_radius_ft
++if cli.is_half_width:
++    is_half_width = True
++if cli.no_export_shp:
++    export_final_shp = False
++if cli.out_export_folder:
++    out_export_folder = cli.out_export_folder
++if cli.out_export_name:
++    out_export_name = cli.out_export_name
  # ---------------------------------------------------------------------
  # Helpers
  # ---------------------------------------------------------------------
@@ -62,7 +108,11 @@ index bf83228dcdfa2428e4cfedf98a3b53075370f911..71501e5da4cfb431dc3a39e43605ef26
      d0 = start_measure
      d1 = length - start_measure
      desired_len = min(half_len, max(d0, d1))
-@@ -71,50 +71,70 @@ def to_point_geometry(any_geom, sr):
+     if d0 > d1:
+         start = max(0.0, start_measure - desired_len)
+         end = start_measure
+     else:
+@@ -71,125 +117,165 @@ def to_point_geometry(any_geom, sr):
              p = any_geom.firstPoint
          else:
              p = any_geom.centroid
@@ -132,8 +182,32 @@ index bf83228dcdfa2428e4cfedf98a3b53075370f911..71501e5da4cfb431dc3a39e43605ef26
  # ---------------------------------------------------------------------
  # PRE-FLIGHT IMPORT to GDB (explicit name -> avoids Describe/path problems)
  # ---------------------------------------------------------------------
++if not arcpy.Exists(flowlines_shp):
++    raise RuntimeError(
++        "Input flowlines path does not exist. "
++        "Set 'flowlines_shp' in the script or pass --flowlines in VS Code terminal."
++    )
++log("Running WABuffer with configuration:")
++log(f" flowlines_shp={flowlines_shp}")
++log(f" out_gdb={out_gdb}")
++log(f" type_field={type_field}, bankfull_field={bankfull_field}")
++log(f" target_sr_wkid={target_sr_wkid}, snap_tol_ft={snap_tol_ft}, intersection_radius_ft={intersection_radius_ft}")
++log(f" is_half_width={is_half_width}, export_final_shp={export_final_shp}")
  log(f"Preflight import starting for: {flowlines_shp}")
-@@ -135,61 +155,70 @@ import_fc = os.path.join(out_gdb, "flowlines_src")
+ # Repair geometry on the shapefile
+ try:
+     arcpy.management.RepairGeometry(flowlines_shp, delete_null="DELETE_NULL")
+     log("RepairGeometry complete on source shapefile.")
+ except Exception as e:
+     log(f"RepairGeometry warning: {e}")
+ # Add spatial index to the shapefile
+ try:
+     arcpy.management.AddSpatialIndex(flowlines_shp)
+     log("AddSpatialIndex complete on source shapefile.")
+ except Exception as e:
+     log(f"AddSpatialIndex warning: {e}")
+ # Explicit import name inside GDB
+ import_fc = os.path.join(out_gdb, "flowlines_src")
  if not arcpy.Exists(import_fc):
      log(f"Importing shapefile to GDB as: {import_fc}")
      t0 = time.time()
