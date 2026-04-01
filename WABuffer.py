@@ -24,6 +24,8 @@ snap_tol_ft = 10.0
 intersection_radius_ft = 56.0  # fixed Western WA site radius
 is_half_width = False
 out_gdb = r"D:\Downloaded Shapes\NHD\Washington\WABuffers.gdb"
+<<<<<<< ours
+<<<<<<< ours
 
 # LIKE patterns
 s_like = "%S%"
@@ -31,6 +33,17 @@ f_like = "%F%"
 np_like_1 = "%NP%"
 np_like_2 = "%Np%"
 
+=======
+=======
+>>>>>>> theirs
+# Canonical type labels used by this workflow
+TYPE_S = "S"
+TYPE_F = "F"
+TYPE_NP = "NP"
+<<<<<<< ours
+>>>>>>> theirs
+=======
+>>>>>>> theirs
 # Optional final shapefile export
 export_final_shp = True
 out_export_folder = r"D:\Downloaded Shapes\NHD\Washington\exports"
@@ -114,8 +127,39 @@ def field_delim_for(workspace, field):
         return arcpy.AddFieldDelimiters(workspace, field)
     except Exception:
         return field
+<<<<<<< ours
+<<<<<<< ours
 
 
+=======
+=======
+>>>>>>> theirs
+def canonical_stream_type(raw_value):
+    """
+    Normalize stream type text to one of: S, F, NP, or None.
+    Handles mixed case and common separators (space, -, _, /).
+    """
+    if raw_value is None:
+        return None
+    txt = str(raw_value).strip().upper()
+    if not txt:
+        return None
+    # Normalize separators to spaces for token checks.
+    normalized = txt
+    for sep in ("-", "_", "/"):
+        normalized = normalized.replace(sep, " ")
+    tokens = [t for t in normalized.split() if t]
+    if any(t.startswith("NP") for t in tokens):
+        return TYPE_NP
+    if any(t.startswith("S") for t in tokens):
+        return TYPE_S
+    if any(t.startswith("F") for t in tokens):
+        return TYPE_F
+    return None
+<<<<<<< ours
+>>>>>>> theirs
+=======
+>>>>>>> theirs
 def try_remove_mz(fc):
     """Attempt RemoveM/RemoveZ if available; skip gracefully otherwise."""
     for tool_name in ("RemoveM", "RemoveZ"):
@@ -144,6 +188,17 @@ target_sr = arcpy.SpatialReference(target_sr_wkid)
 # ---------------------------------------------------------------------
 # PRE-FLIGHT IMPORT to GDB (explicit name -> avoids Describe/path problems)
 # ---------------------------------------------------------------------
+if not arcpy.Exists(flowlines_shp):
+    raise RuntimeError(
+        "Input flowlines path does not exist. "
+        "Set 'flowlines_shp' in the script or pass --flowlines in VS Code terminal."
+    )
+log("Running WABuffer with configuration:")
+log(f" flowlines_shp={flowlines_shp}")
+log(f" out_gdb={out_gdb}")
+log(f" type_field={type_field}, bankfull_field={bankfull_field}")
+log(f" target_sr_wkid={target_sr_wkid}, snap_tol_ft={snap_tol_ft}, intersection_radius_ft={intersection_radius_ft}")
+log(f" is_half_width={is_half_width}, export_final_shp={export_final_shp}")
 log(f"Preflight import starting for: {flowlines_shp}")
 
 # Repair geometry on the shapefile
@@ -190,15 +245,35 @@ t0 = time.time()
 arcpy.management.Project(import_fc, flowlines_proj, target_sr)
 log(f"Project took {time.time() - t0:.2f}s")
 arcpy.env.outputCoordinateSystem = target_sr
+<<<<<<< ours
+<<<<<<< ours
 
+=======
+=======
+>>>>>>> theirs
+# Prepare a normalized type field so selection is robust/case-insensitive
+flowlines_typed = os.path.join(scratch_gdb, "flowlines_projected_typed")
+arcpy.management.CopyFeatures(flowlines_proj, flowlines_typed)
+wa_type_field = "WA_TYPE"
+if wa_type_field not in [f.name for f in arcpy.ListFields(flowlines_typed)]:
+    arcpy.management.AddField(flowlines_typed, wa_type_field, "TEXT", field_length=8)
+with arcpy.da.UpdateCursor(flowlines_typed, [type_field, wa_type_field]) as ucur:
+    for type_raw, _ in ucur:
+        ucur.updateRow([type_raw, canonical_stream_type(type_raw)])
+<<<<<<< ours
+>>>>>>> theirs
+=======
+>>>>>>> theirs
 # ---------------------------------------------------------------------
-# Build layers for S, F, and Np (LIKE filters for robustness)
+# Build layers for S, F, and Np from canonicalized type values
 # ---------------------------------------------------------------------
-workspace_for_sql = os.path.dirname(flowlines_proj)
-type_f_delim = field_delim_for(workspace_for_sql, type_field)
+workspace_for_sql = os.path.dirname(flowlines_typed)
+wa_type_delim = field_delim_for(workspace_for_sql, wa_type_field)
 s_lyr = "lyr_S"
 f_lyr = "lyr_F"
 np_lyr = "lyr_NP"
+<<<<<<< ours
+<<<<<<< ours
 arcpy.management.MakeFeatureLayer(flowlines_proj, s_lyr, f"{type_f_delim} LIKE '{s_like}'")
 arcpy.management.MakeFeatureLayer(flowlines_proj, f_lyr, f"{type_f_delim} LIKE '{f_like}'")
 arcpy.management.MakeFeatureLayer(
@@ -207,6 +282,16 @@ arcpy.management.MakeFeatureLayer(
     f"{type_f_delim} LIKE '{np_like_1}' OR {type_f_delim} LIKE '{np_like_2}'",
 )
 
+=======
+arcpy.management.MakeFeatureLayer(flowlines_typed, s_lyr, f"{wa_type_delim} = '{TYPE_S}'")
+arcpy.management.MakeFeatureLayer(flowlines_typed, f_lyr, f"{wa_type_delim} = '{TYPE_F}'")
+arcpy.management.MakeFeatureLayer(flowlines_typed, np_lyr, f"{wa_type_delim} = '{TYPE_NP}'")
+>>>>>>> theirs
+=======
+arcpy.management.MakeFeatureLayer(flowlines_typed, s_lyr, f"{wa_type_delim} = '{TYPE_S}'")
+arcpy.management.MakeFeatureLayer(flowlines_typed, f_lyr, f"{wa_type_delim} = '{TYPE_F}'")
+arcpy.management.MakeFeatureLayer(flowlines_typed, np_lyr, f"{wa_type_delim} = '{TYPE_NP}'")
+>>>>>>> theirs
 # ---------------------------------------------------------------------
 # 1) Type S & F buffers = (half bankfull + 50 ft)
 # ---------------------------------------------------------------------
@@ -320,11 +405,37 @@ arcpy.analysis.Buffer(np_half_fc, np_half_buffers_fc, buf_field_np, method="PLAN
 
 # ---------------------------------------------------------------------
 # 3) Type Np intersections (Western WA): true intersections only
-#     (Improved: FeatureVerticesToPoints INTERSECTION)
+#     (Basic/Spatial Analyst friendly: Intersect lines->points)
 # ---------------------------------------------------------------------
+<<<<<<< ours
+<<<<<<< ours
 np_x_pts_raw_fc = os.path.join(scratch_gdb, "NP_intersections_pts_raw")
 arcpy.management.FeatureVerticesToPoints(np_lines_single_fc, np_x_pts_raw_fc, "INTERSECTION")
 
+=======
+# Build candidate intersections from NP line-on-line intersects (point output)
+np_x_pts_raw_fc = os.path.join(scratch_gdb, "NP_intersections_pts_raw")
+=======
+# Build candidate intersections from NP line-on-line intersects (point output)
+np_x_pts_raw_fc = os.path.join(scratch_gdb, "NP_intersections_pts_raw")
+>>>>>>> theirs
+arcpy.analysis.Intersect(
+    in_features=[np_lines_single_fc, np_lines_single_fc],
+    out_feature_class=np_x_pts_raw_fc,
+    join_attributes="ONLY_FID",
+    output_type="POINT"
+)
+# Keep only intersections where the two intersected features are different lines
+fid_fields = [f.name for f in arcpy.ListFields(np_x_pts_raw_fc) if f.name.upper().startswith("FID_")]
+if len(fid_fields) >= 2:
+    with arcpy.da.UpdateCursor(np_x_pts_raw_fc, [fid_fields[0], fid_fields[1]]) as ucur:
+        for fid_a, fid_b in ucur:
+            if fid_a == fid_b:
+                ucur.deleteRow()
+<<<<<<< ours
+>>>>>>> theirs
+=======
+>>>>>>> theirs
 # Deduplicate identical geometry points
 arcpy.management.DeleteIdentical(np_x_pts_raw_fc, ["Shape"])
 
